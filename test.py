@@ -9,7 +9,17 @@
 import os
 import signal
 import threading
+import time
 from multiprocessing import process
+import networkx as nx
+
+import matplotlib
+from PyQt5.QtWidgets import QApplication, QMainWindow
+
+#matplotlib.use('Qt5Agg')
+from matplotlib import pyplot as plt
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 import subprocess
@@ -17,8 +27,10 @@ import subprocess
 class Ui_mainWindow(object):
 
     def __init__(self):
+        self.graf = None
         self.ping_thread = None
         self.ping_process = None
+        self.stop_threads = False
 
 
     def setupUi(self, mainWindow):
@@ -171,15 +183,15 @@ class Ui_mainWindow(object):
         self.tracert_h.setMaximum(999999)
         self.tracert_h.setProperty("value", 0)
         self.tracert_h.setObjectName("tracert_h")
-        self.label_16 = QtWidgets.QLabel(self.centralwidget)
-        self.label_16.setGeometry(QtCore.QRect(250, 210, 21, 21))
-        self.label_16.setObjectName("label_16")
-        self.tracert_j = QtWidgets.QSpinBox(self.centralwidget)
-        self.tracert_j.setGeometry(QtCore.QRect(200, 210, 42, 22))
-        self.tracert_j.setMinimum(0)
-        self.tracert_j.setMaximum(999999)
-        self.tracert_j.setProperty("value", 0)
-        self.tracert_j.setObjectName("tracert_j")
+        #self.label_16 = QtWidgets.QLabel(self.centralwidget)
+        #self.label_16.setGeometry(QtCore.QRect(250, 210, 21, 21))
+        #self.label_16.setObjectName("label_16")
+        #self.tracert_j = QtWidgets.QSpinBox(self.centralwidget)
+        #self.tracert_j.setGeometry(QtCore.QRect(200, 210, 42, 22))
+        #self.tracert_j.setMinimum(0)
+        #self.tracert_j.setMaximum(999999)
+        #self.tracert_j.setProperty("value", 0)
+        #self.tracert_j.setObjectName("tracert_j")
         self.label_17 = QtWidgets.QLabel(self.centralwidget)
         self.label_17.setGeometry(QtCore.QRect(330, 210, 21, 21))
         self.label_17.setObjectName("label_17")
@@ -250,6 +262,10 @@ class Ui_mainWindow(object):
         self.statusbar.setObjectName("statusbar")
         mainWindow.setStatusBar(self.statusbar)
 
+        self.pushButton_ipconfig.clicked.connect(self.start_ipconfig_thread)
+        self.pushButton_tracert.clicked.connect(self.start_tracert_thread)
+        self.pushButton_arp.clicked.connect(self.start_arp_thread)
+
         self.retranslateUi(mainWindow)
         QtCore.QMetaObject.connectSlotsByName(mainWindow)
 
@@ -278,13 +294,13 @@ class Ui_mainWindow(object):
         self.ipconfig_displaydns.setText(_translate("mainWindow", "/displaydns"))
         self.ipconfig_registerdns.setText(_translate("mainWindow", "/registerdns"))
         self.label_11.setText(_translate("mainWindow", "/showclassid [адаптер]"))
-        self.label_12.setText(_translate("mainWindow", "/showclassid [адаптер]"))
+        self.label_12.setText(_translate("mainWindow", "/setclassid [адаптер]"))
         self.label_13.setText(_translate("mainWindow", "устанавливаемый код класса dhcp"))
         self.pushButton_ipconfig.setText(_translate("mainWindow", "Выполнить"))
         self.label_14.setText(_translate("mainWindow", "tracert"))
         self.tracert_d.setText(_translate("mainWindow", "-d"))
         self.label_15.setText(_translate("mainWindow", "-h"))
-        self.label_16.setText(_translate("mainWindow", "-j"))
+        #self.label_16.setText(_translate("mainWindow", "-j"))
         self.label_17.setText(_translate("mainWindow", "-w"))
         self.label_18.setText(_translate("mainWindow", "Конечное Имя"))
         self.pushButton_tracert.setText(_translate("mainWindow", "Выполнить"))
@@ -298,28 +314,232 @@ class Ui_mainWindow(object):
         self.label_23.setText(_translate("mainWindow", "-N if_addr"))
         self.pushButton_arp.setText(_translate("mainWindow", "Выполнить"))
 
+
+    def arp(self):
+        arp_arr = []
+        if self.arp_s.isChecked():
+            arp_arr.append("-s")
+            if self.arp_inet_addr.toPlainText() != "":
+                arp_arr.append(self.arp_inet_addr.toPlainText())
+                if self.arp_eth_addr.toPlainText() != "":
+                    arp_arr.append(self.arp_eth_addr.toPlainText())
+                    if self.arp_if_addr.toPlainText() != "":
+                        arp_arr.append(self.arp_if_addr.toPlainText())
+        elif self.arp_d.isChecked():
+            arp_arr.append("-d")
+            if self.arp_inet_addr.toPlainText() != "":
+                arp_arr.append(self.arp_inet_addr.toPlainText())
+                if self.arp_if_addr.toPlainText() != "":
+                    arp_arr.append(self.arp_if_addr.toPlainText())
+        elif self.arp_a.isChecked():
+            arp_arr.append("-a")
+            if self.arp_inet_addr.toPlainText() != "":
+                arp_arr.append(self.arp_inet_addr.toPlainText())
+            if self.arp__n_if_addr.toPlainText() != "":
+                arp_arr.append("-N")
+                arp_arr.append(self.arp__n_if_addr.toPlainText())
+
+        if len(arp_arr) == 0:
+            arp_arr.append("arp")
+        else:
+            arp_arr.insert(0, "arp ")
+
+        process = subprocess.Popen(
+            arp_arr,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding='cp866'
+        )
+        print(process.args)
+
+        self.graf = nx.Graph()
+
+        while True:
+            line = process.stdout.readline()
+            if not line or self.stop_threads == True:
+                break
+            self.update_output(line)
+
+            parts = line.split()
+            if len(parts) == 3:
+                ip_address = parts[0]
+                mac_address = parts[1]
+                self.graf.add_node(ip_address)
+                self.graf.add_edge(ip_address, mac_address)
+
+
+
+
+    def start_arp_thread(self):
+        try:
+            self.stop_threads = True
+            self.thread.join()
+        except Exception as e:
+            print(e)
+            pass
+        self.thread = threading.Thread(target=self.arp)
+        self.stop_threads = False
+        self.output.clear()
+        self.thread.start()
+        self.thread.join()
+        #time.sleep(0.01)
+        # Визуализировать граф
+        pos = nx.spring_layout(self.graf, k=0.8)
+        nx.draw(self.graf, pos, with_labels=True, node_size=2500, node_color='skyblue', font_size=10)
+        plt.title("Граф сети на основе таблицы ARP")
+        plt.show()
+
+
+
+    def tracert(self):
+        tracert_arr = []
+        if self.tracert_d.isChecked():
+            tracert_arr.append("-d ")
+        if self.tracert_h.value() != 0:
+            tracert_arr.append("-h ")
+            tracert_arr.append(str(self.tracert_h.value()))
+        #if self.tracert_j.value() != 0:
+         #   tracert_arr.append("-j ")
+          #  tracert_arr.append(str(self.tracert_j.value()))
+        if self.tracert_w.value() != 0:
+            tracert_arr.append("-w ")
+            tracert_arr.append(str(self.tracert_w.value()))
+        if self.tracert_ip.toPlainText() != "":
+            tracert_arr.append(str(self.tracert_ip.toPlainText()))
+        if len(tracert_arr) == 0:
+            tracert_arr.append("tracert")
+        else:
+            tracert_arr.insert(0, "tracert ")
+
+        process = subprocess.Popen(
+            tracert_arr,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding='cp866'
+        )
+        print(process.args)
+
+        while True:
+            line = process.stdout.readline()
+            if not line or self.stop_threads == True:
+                break
+            self.update_output(line)
+
+    def start_tracert_thread(self):
+        try:
+            self.stop_threads = True
+            self.thread.join()
+        except Exception as e:
+            print(e)
+            pass
+        self.thread = threading.Thread(target=self.tracert)
+        self.stop_threads = False
+        self.output.clear()
+        self.thread.start()
+
+
+
+    def ipconfig(self):
+        ipconfig_arr = []
+        if self.ipconfig_q.isChecked():
+            ipconfig_arr.append("/? ")
+        if self.ipconfig_all.isChecked():
+            ipconfig_arr.append("/all")
+        if self.ipconfig_renew_all.isChecked():
+            ipconfig_arr.append("/renew")
+        if self.ipconfig_release_all.isChecked():
+            ipconfig_arr.append("/release")
+        if self.ipconfig_flushdns.isChecked():
+            ipconfig_arr.append("/flushdns")
+        if self.ipconfig_displaydns.isChecked():
+            ipconfig_arr.append("/displaydns")
+        if self.ipconfig_registerdns.isChecked():
+            ipconfig_arr.append("/registerdns")
+
+        release = self.ipconfig_release_adapter.toPlainText()
+        if release != "":
+            ipconfig_arr.append("/release")
+            ipconfig_arr.append(release)
+        renew = self.ipconfig_renew_adapter.toPlainText()
+        if renew != "":
+            ipconfig_arr.append("/renew")
+            ipconfig_arr.append(renew)
+        showclassid = self.ipconfig_showclassid.toPlainText()
+        if showclassid != "":
+            ipconfig_arr.append("/showclassid")
+            ipconfig_arr.append(showclassid)
+        setclassid = self.ipconfig_setclassid.toPlainText()
+        if setclassid != "":
+            ipconfig_arr.append("/setclassid")
+            ipconfig_arr.append(setclassid)
+            setclassid_code = self.ipconfig_setclassid_2.toPlainText()
+            if setclassid != "":
+                ipconfig_arr.append(setclassid_code)
+
+        if len(ipconfig_arr) == 0:
+            ipconfig_arr.append("ipconfig")
+        else:
+            ipconfig_arr.insert(0, "ipconfig ")
+
+        process = subprocess.Popen(
+            ipconfig_arr,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding='cp866'
+        )
+        print(process.args)
+        while True:
+            line = process.stdout.readline()
+            if not line or self.stop_threads == True:
+                break
+            self.update_output(line)
+
+    def start_ipconfig_thread(self):
+        try:
+            self.stop_threads = True
+            self.thread.join()
+        except Exception as e:
+            print(e)
+            pass
+        self.thread = threading.Thread(target=self.ipconfig)
+        self.stop_threads = False
+        self.output.clear()
+        self.thread.start()
+
     def ping(self):
-        ping_arr = ["ping "]
+        ping_arr = []
         if self.ping_t.isChecked():
             ping_arr.append("-t ")
         if self.ping_a.isChecked():
             ping_arr.append("-a ")
         if self.ping_n.value() != 0:
-            ping_arr.append("-n " + str(self.ping_n.value()) + " ")
+            ping_arr.append("-n ")
+            ping_arr.append(str(self.ping_n.value()))
         if self.ping_l.value() != 0:
-            ping_arr.append("-l " + str(self.ping_l.value()) + " ")
+            ping_arr.append("-l ")
+            ping_arr.append(str(self.ping_l.value()))
         if self.ping_f.isChecked():
-            ping_arr.append("-f")
+            ping_arr.append("-f ")
         if self.ping_i.value() != 0:
-            ping_arr.append("-i " + str(self.ping_i.value()) + " ")
+            ping_arr.append("-i ")
+            ping_arr.append(str(self.ping_i.value()))
         if self.ping_r.value() != 0:
-            ping_arr.append("-r " + str(self.ping_r.value()) + " ")
+            ping_arr.append("-r ")
+            ping_arr.append(str(self.ping_r.value()))
         if self.ping_w.value() != 0:
-            ping_arr.append("-w " + str(self.ping_w.value()) + " ")
+            ping_arr.append("-w ")
+            ping_arr.append(str(self.ping_w.value()))
         host = self.ip.toPlainText()
+        if host != '':
+            ping_arr.append(host)
+        if len(ping_arr) == 0:
+            ping_arr.append("ping")
+        else:
+            ping_arr.insert(0, "ping ")
 
-        ping_arr.append(host)
-        print(ping_arr)
         # Выполните команду ping с дополнительными параметрами
         process = subprocess.Popen(
             ping_arr,
@@ -331,15 +551,24 @@ class Ui_mainWindow(object):
         print(process.args)
         while True:
             line = process.stdout.readline()
-            if not line:
+            if not line or self.stop_threads == True:
                 break
             self.update_output(line)
 
     def start_ping_thread(self):
-        self.ping_thread = threading.Thread(target=self.ping)
-        self.ping_thread.start()
+        try:
+            self.stop_threads = True
+            self.thread.join()
+        except Exception as e:
+            print(e)
+            pass
+        self.thread = threading.Thread(target=self.ping)
+        self.stop_threads = False
+        self.output.clear()
+        self.thread.start()
 
     def update_output(self, text):
+        time.sleep(0.01)
         self.output.append(text)
         self.output.verticalScrollBar().setValue(self.output.verticalScrollBar().maximum())
 
